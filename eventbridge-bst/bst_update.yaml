@@ -1,0 +1,112 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+    Creates a lambda function which modifies the cron schedules
+    of CloudWatch event rules based on the BST time shift in the UK
+
+Parameters:
+  ProductTag:
+    Type: String
+    Default: Docman10
+
+  EnvName:
+    Type: String
+    Default: docman10ts1
+
+  RuleList:
+    Type: String
+    Default: "test-event,\
+        test-event1"
+
+Resources:
+  ScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Name: !Sub ${EnvName}-bst-update-event
+      Description: "Triggers the bst-update lambda function each morning"
+      ScheduleExpression: "cron(0 1 * * ? *)"
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "LambdaFunction"
+              - "Arn"
+          Id: "TargetFunctionV1"
+
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "LambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "ScheduledRule"
+          - "Arn"
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvName}-bst-update-lambda
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Handler: bst_update.lambda_handler
+      Code:
+        S3Bucket: lambdafunction-zips
+        S3Key: bst_update.zip
+      Environment:
+        Variables:
+          AWS_ALIAS: !Ref 'EnvName' 
+          SNS_ARN: !Ref 'SNSTopic'
+          SSM_PARAM: !Ref 'SSMParameter'
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvName}-bst-update-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ${EnvName}-bst-update-lambda-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                - 'sns:Publish'
+                - 'events:PutRule'
+                - 'events:DescribeRule'
+                - 'ssm:GetParameter'
+                Resource: '*'
+      Path: "/"
+
+  SSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub ${EnvName}-bst-update-ssm
+      Type: StringList
+      Value: !Ref RuleList
+      Description: SSM Parameter containing a list of eventbridge rules
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${EnvName}-bst-update-sns'
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: alexandercook0@gmail.com
+      Protocol: email
+      TopicArn: !Ref 'SNSTopic'
